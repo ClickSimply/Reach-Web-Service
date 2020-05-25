@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate lazy_static;
+extern crate hyper;
+use core::marker::PhantomData;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
-use quick_js::{Context, JsValue};
+use quick_js::{Context, JsValue, JsAsync};
 use tokio::runtime::*;
 use tokio::time::*;
 use std::{pin::Pin, future::Future};
@@ -13,6 +15,7 @@ use std::{sync::{RwLock, Arc}, net::SocketAddr, cell::{Cell, RefCell}, rc::Rc, t
 use hyper::{Body, Request, Response, Server};
 use hyper::service::{make_service_fn, service_fn};
 use num_cpus;
+use hyper::Client;
 
 /*
 fn js_std_loop(ctx: *mut libquickjs_sys::JSContext) {
@@ -44,7 +47,7 @@ async fn looping<'a>(cnt: i32) {
     looping(cnt + 1).await
 }
 
-thread_local!(pub static CONTEXT: Arc<Context> = Arc::new(Context::new().unwrap()));
+thread_local!(pub static CONTEXT: Context = Context::new().unwrap());
 
 async fn hello(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     // println!("{:?}", req);
@@ -87,9 +90,71 @@ fn test(CTX: &'static LocalKey<Context>) {
     });
 }
 
+async fn run() {
+
+    CONTEXT.with(|context | {
+
+        context.setup_async().unwrap();
+
+        context.add_callback("print", |val: String| {
+            println!("{}", val);
+            return "";
+        }).unwrap();
 
 
-async fn run(jsContext: Arc<Context>) {
+        context.eval("let timerCbs = []; const setTimeout = (cb, timeout) => {
+            let len = timerCbs.length;
+            timerCbs.push(cb);
+            async_timers(len, timeout);
+            return len;
+        };").unwrap();
+        
+        context.add_callback("async_timers", |index: i32, timeout: i32| {
+            let time = timeout as u64;
+            let idx = index;
+            tokio::task::spawn_local(async move {
+                tokio::time::delay_for(Duration::from_millis(time)).await;
+                CONTEXT.with(|ctx| {
+                    // ctx.call_function("callTimer", vec![idx]).unwrap();
+                    ctx.eval(format!("timerCbs[{}]();", idx).as_str()).unwrap();
+                });
+            });
+            index
+        }).unwrap();
+
+        context.eval("const fetch = (url) => {
+            return new Promise((res, rej) => {
+                __fetch_async(url);
+                
+            });
+        }").unwrap();
+        
+        context.add_callback("__fetch_async", |url: String| {
+            tokio::task::spawn_local(async move {
+                let client = Client::new();
+
+                // Parse an `http::Uri`...
+                let uri = url.as_str().parse().unwrap();
+                
+                // Await the response...
+                let resp = client.get(uri).await.unwrap();
+                while let Some(chunk) = resp.body_mut().data().await {
+                    stdout().write_all(&chunk?).await?;
+                }
+                CONTEXT.with(|ctx| {
+                    // ctx.call_function("callTimer", vec![idx]).unwrap();
+                    ctx.eval(format!("timerCbs[{}]();", idx).as_str()).unwrap();
+                });
+            });
+            0i32
+        }).unwrap();
+
+        context.eval("setTimeout(() => {
+            print('hello, world!');
+        }, 2000)").unwrap();
+        // println!("{:?}", value);
+        
+    });
 
     let addr = ([127, 0, 0, 1], 3000).into();
 
@@ -103,7 +168,6 @@ async fn run(jsContext: Arc<Context>) {
         //
         // Each connection could send multiple requests, so
         // the `Service` needs a clone to handle later requests.
-        let ctx = Arc::clone(&jsContext);
 
         async move {
             // This is the `Service` that will handle the connection.
@@ -112,10 +176,16 @@ async fn run(jsContext: Arc<Context>) {
             Ok::<_, Error>(service_fn(move |_req: Request<Body>| {
 
                 async move {
-                    let str_result = ctx.eval_async::<String>("setTimeout(() => {
-                        complete('hello');
-                    })").await.unwrap();
-                    Ok::<_, Error>(Response::new(Body::from(str_result))) 
+
+                    println!("HELLO");
+
+                    let str_result = JsAsync::<String>::exec(&CONTEXT, "setTimeout(() => {
+                        complete('hello, world!');
+                    }, 2000)".to_string()).await;
+
+
+                    Ok::<_, Error>(Response::new(Body::from(str_result.unwrap())))
+                    // Ok::<_, Error>(Response::new(Body::from("hello")))
                 }
             }))
         }
@@ -138,50 +208,15 @@ fn main() {
     .enable_all()
     .build().unwrap();
 
-    CONTEXT.with(|context | {
-        single_rt.spawn(async {
-            //tokio::time::delay_for(Duration::from_millis(1000)).await;
-            // println!("One second later!");
-            let mut total = 0u128;
-            println!("TOTAL {:?}", total);
-        });
-
-        context.setup_async();
-
-        context.add_callback("print", |val: String| {
-            println!("{}", val);
-            return "";
-        }).unwrap();
-
-
-        context.eval("var timerCbs = []; const setTimeout = (cb, timeout) => {
-            let len = timerCbs.length;
-            timerCbs.push(cb);
-            async_timers(len, timeout);
-        }; this.callTimer = (id) => { timerCbs[id](); }").unwrap();
-
-        context.eval("this.lowerCase = (str) => str.toLowerCase();").unwrap();
-        
-        context.add_callback("async_timers", |index: i32, timeout: i32| {
-            let time = timeout as u64;
-            let idx = index;
-            tokio::task::spawn_local(async move {
-                tokio::time::delay_for(Duration::from_millis(time)).await;
-                CONTEXT.with(|ctx| {
-                    ctx.call_function("callTimer", vec![idx]).unwrap();
-                    // ctx.eval(format!("timerCbs[{}]();", idx).as_str()).unwrap();
-                });
-            });
-            index
-        }).unwrap();
-
-        context.eval("setTimeout(() => print('hello, world!'), 2000)").unwrap();
-        // println!("{:?}", value);
-        
-    
-        let local = tokio::task::LocalSet::new();
-        local.block_on(&mut single_rt, run(Arc::clone(context)));
+    single_rt.spawn(async {
+        //tokio::time::delay_for(Duration::from_millis(1000)).await;
+        // println!("One second later!");
+        let mut total = 0u128;
+        println!("TOTAL {:?}", total);
     });
+
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&mut single_rt, run());
 }
  
 // Since the Server needs to spawn some background tasks, we needed
