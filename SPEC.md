@@ -10,11 +10,9 @@ It's like Nginx with a built in database, event loop, javascript application run
 
 **Libraries:**
 - Javascript Runtime: https://crates.io/crates/libquickjs-sys
-- Webassembly Rutnime: https://crates.io/crates/lucet-runtime (implement later after JS backend)
 - Database backend: https://crates.io/crates/rocksdb with https://github.com/meilisearch/MeiliSearch
 - Database Key & Value storage format: https://crates.io/crates/no_proto
-- Web server: https://crates.io/crates/warp or https://crates.io/crates/actix
-- Native Modules: https://michael-f-bryan.github.io/rust-ffi-guide/dynamic_loading.html
+- Web server: https://crates.io/crates/hyper
 - Initial Native Modules: RocksDB/MeiliSearch Database, HTTP Client, Docker Manager, File System, Database
 - Core functions: 
     - SMTP (has JS API)
@@ -32,7 +30,7 @@ Besides having so many choices, being vendor locked to a specific cloud provider
 
 On the other end, self hosting everything on Virtual Machines is tedious work that nobody is willing or sometimes able to do, especially at larger volumes.
 
-Reach Web Service is designed as a all-in-one solution that handles almost all the use case scenarios for small to medium size web services/aplications with no external dependencies.  You should be able to install Reach Web Service on a server, install a Reach app, then go.
+Reach Web Service is designed as a all-in-one solution that handles almost all the use case scenarios for small to medium size web services/aplications with no external dependencies.  You should be able to install Reach Web Service on a server, install a Reach app, then go.  The serverless style nature of the apps will allow us to build larger, more scalable versions of Reach Web Service in the near future and deploy the existing apps to larger scale with zero effort.
 
 All of the complex choices you're normally faced with when building a typical web service will have common sense defaults in RWS that fit a majority of small to medium sized deployments.  The database, for example, will not be the most performant, highly scalable, robust database on the market.  But it doesn't need to be for 99.99% of use cases.  It just needs to be complex and useful enough to get people off the ground.
 
@@ -43,9 +41,9 @@ Security should be handled automatically with sane defaults where possible and a
 ## Project Plan
 
 1. **Core Application**
-The core of RWS is going to be a cross between NGINX and NodeJS with some extra spices.  We start with a web server (warp/actix) and plop the QuickJS runtime ontop of it.  Ideally the QuickJS runtime is tied into Tokio's event loop so that `async` and `Promise` can work in the javascript runtime.  Here is a project that has integrated a third party runtime (libuv) into QuickJS: https://github.com/saghul/txiki.js
+The core of RWS is going to be a cross between NGINX and NodeJS with some extra spices.  We start with a web server (hyper) and plop the QuickJS runtime ontop of it.  The proof of concept for this has already been completed.
 
-The native module system (https://michael-f-bryan.github.io/rust-ffi-guide/dynamic_loading.html) should be designed here as well, native modules should be able to:
+The module system should be designed and deployed here as well, native modules should be able to:
 - Read the `config.js` file when the RWS app is started and respond to it (that way additional properties can be supported in config.js depending on which modules are loaded).
 - Add javascript modules to the QuickJS runtime.
 - Add javascript code to the static `/client.js` endpoint.
@@ -56,9 +54,5 @@ JSON Web Tokens should also be implmented at this stage.
 Server side javscript apps should be able to:
 - Respond to HTTP and WebSockets
 - Read/Modify the JSON Web Token in HTTP requests or in WS Messages.  WS should be disconnected/reconnected automatically on JWT update.
-- 
 
-
-
-
-2. 
+2. Create Initial Modules

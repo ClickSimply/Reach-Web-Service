@@ -16,3 +16,8 @@ crossbeam = "0.7.3"
 hyper = "0.13.5"
 lazy_static = "1.4.0"
 quick-js = { git = "https://github.com/ClickSimply/quickjs-rs" }
+reqwest = "0.10.4"
+http = "0.2.1"
+actix-web = "2.0.0"
+actix-rt = "1.1.1"
+actix-http = "1.0.1"

@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 extern crate hyper;
+use actix_web::HttpRequest;
 use core::marker::PhantomData;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
@@ -16,6 +17,8 @@ use hyper::{Body, Request, Response, Server};
 use hyper::service::{make_service_fn, service_fn};
 use num_cpus;
 use hyper::Client;
+use actix_web::{get, web, App, HttpServer, Responder};
+use actix_rt;
 
 /*
 fn js_std_loop(ctx: *mut libquickjs_sys::JSContext) {
@@ -94,14 +97,14 @@ async fn run() {
 
     CONTEXT.with(|context | {
 
-        context.setup_async().unwrap();
+        JsAsync::init(&CONTEXT).unwrap();
 
         context.add_callback("print", |val: String| {
             println!("{}", val);
             return "";
         }).unwrap();
 
-
+/*
         context.eval("let timerCbs = []; const setTimeout = (cb, timeout) => {
             let len = timerCbs.length;
             timerCbs.push(cb);
@@ -120,38 +123,34 @@ async fn run() {
                 });
             });
             index
-        }).unwrap();
+        }).unwrap();*/
 
         context.eval("const fetch = (url) => {
-            return new Promise((res, rej) => {
-                __fetch_async(url);
-                
-            });
-        }").unwrap();
+                return new Promise((res, rej) => {
+                    let ln = __fetch_cbs.length;
+                    __fetch_async(ln, url);
+                    __fetch_cbs.push([res, rej]);
+                });
+            };
+            const __fetch_cbs = [];
+        ").unwrap();
         
-        context.add_callback("__fetch_async", |url: String| {
+        context.add_callback("__fetch_async", |i: i32, url: String| {
             tokio::task::spawn_local(async move {
-                let client = Client::new();
-
-                // Parse an `http::Uri`...
-                let uri = url.as_str().parse().unwrap();
-                
                 // Await the response...
-                let resp = client.get(uri).await.unwrap();
-                while let Some(chunk) = resp.body_mut().data().await {
-                    stdout().write_all(&chunk?).await?;
-                }
+                let body = reqwest::get(url.as_str()).await.unwrap().text().await.unwrap();
+
                 CONTEXT.with(|ctx| {
-                    // ctx.call_function("callTimer", vec![idx]).unwrap();
-                    ctx.eval(format!("timerCbs[{}]();", idx).as_str()).unwrap();
+                    ctx.eval(format!("__fetch_cbs[{}][0]({:?});", i, body).as_str()).unwrap();
+                    ctx.step(); // resolve promise
                 });
             });
             0i32
         }).unwrap();
 
         context.eval("setTimeout(() => {
-            print('hello, world!');
-        }, 2000)").unwrap();
+            print('hello');
+        }, 1000)").unwrap();
         // println!("{:?}", value);
         
     });
@@ -177,14 +176,11 @@ async fn run() {
 
                 async move {
 
-                    println!("HELLO");
+                    let str_result = JsAsync::eval_as::<String>(&CONTEXT, r####"
+                        complete(await fetch("https://google.com"));
+                    "####.to_string()).await.unwrap();
 
-                    let str_result = JsAsync::<String>::exec(&CONTEXT, "setTimeout(() => {
-                        complete('hello, world!');
-                    }, 2000)".to_string()).await;
-
-
-                    Ok::<_, Error>(Response::new(Body::from(str_result.unwrap())))
+                    Ok::<_, Error>(Response::new(Body::from(str_result)))
                     // Ok::<_, Error>(Response::new(Body::from("hello")))
                 }
             }))
@@ -201,8 +197,14 @@ async fn run() {
     }
 }
 
-fn main() {
+async fn hello_world(req: HttpRequest, _stream: actix_web::web::Payload) -> actix_web::HttpResponse {
+    // actix_web::HttpResponse::from("<h1>Hello, world!</h1>")
+    let mut result = actix_web::HttpResponse::Ok();
+    
+    actix_web::HttpResponse::Ok().content_type("text/html").body(format!("<h1>Hello, {}</h1>", req.uri()))
+}
 
+fn main() {
     let mut single_rt = Builder::new()
     .basic_scheduler()
     .enable_all()
@@ -216,7 +218,20 @@ fn main() {
     });
 
     let local = tokio::task::LocalSet::new();
-    local.block_on(&mut single_rt, run());
+    let system_fut = actix_rt::System::run_in_tokio("main", &local);
+    local.block_on(&mut single_rt, async {
+        tokio::task::spawn_local(system_fut);
+
+        let _ = actix_web::HttpServer::new(|| {
+            // actix_web::App::new().service(actix_web::web::resource("/").to(|| async { "<h1>Hello world!</h1>" }))
+            actix_web::App::new().service(actix_web::web::resource("*").to(hello_world))
+        })
+        .bind("127.0.0.1:8082")
+        .unwrap()
+        .run()
+        .await;
+    });
+    // local.block_on(&mut single_rt, run());
 }
  
 // Since the Server needs to spawn some background tasks, we needed
